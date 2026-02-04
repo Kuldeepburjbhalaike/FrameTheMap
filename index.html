@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frame The Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root { --sidebar-w: 360px; --accent: #2c3e50; --active: #27ae60; --error: #c0392b; }
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; background: #333; }
+        
+        /* Layout */
+        #sidebar { 
+            width: var(--sidebar-w); 
+            background: #f8f9fa; 
+            border-right: 1px solid #ddd; 
+            display: flex; 
+            flex-direction: column; 
+            z-index: 2000; 
+            box-shadow: 2px 0 10px rgba(0,0,0,0.2); 
+        }
+        #sidebar-content { flex: 1; overflow-y: auto; padding: 20px; }
+        
+        /* Search Box & Results */
+        .search-container { position: relative; width: 100%; }
+        #search-results {
+            position: absolute;
+            top: 100%; left: 0; right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 3000;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: none; /* Hidden by default */
+            border-radius: 0 0 4px 4px;
+        }
+        .search-result-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #333;
+        }
+        .search-result-item:hover { background-color: #f1f1f1; }
+        .search-result-item:last-child { border-bottom: none; }
+        .search-sub { display: block; font-size: 0.75rem; color: #888; margin-top: 2px; }
+
+        /* Footer */
+        .sidebar-footer { 
+            padding: 15px 20px; 
+            background: #f8f9fa; 
+            border-top: 1px solid #e0e0e0;
+            font-size: 0.85rem; 
+            color: #666; 
+            text-align: center;
+        }
+        .footer-main { display: flex; align-items: center; justify-content: center; gap: 5px; margin-bottom: 8px; font-weight: 500; }
+        .heart { color: #e25555; font-size: 1.1em; }
+        .footer-link { text-decoration: none; color: #0366d6; font-weight: 600; }
+        .footer-link:hover { text-decoration: underline; }
+        .footer-source { display: flex; align-items: center; gap: 4px; color: #0366d6; text-decoration: none; font-weight: 600; }
+        .footer-sub { font-size: 0.75rem; color: #888; line-height: 1.3; }
+        .footer-sub a { color: #666; }
+
+        /* Main Content */
+        #main { flex: 1; position: relative; background: #e0e0e0; display: flex; justify-content: center; align-items: center;}
+        #map-wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
+        #map-select { width: 100%; height: 100%; z-index: 10; cursor: grab; }
+        #map-select.drawing { cursor: crosshair !important; }
+        
+        /* Visual Frame */
+        #selection-frame {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px dashed #333;
+            background: transparent;
+            box-shadow: 0 0 0 9999px rgba(255, 255, 255, 0.6); 
+            pointer-events: none; 
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #333;
+            font-weight: bold;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        #selection-frame::after { content: "Fixed Frame"; background: rgba(255,255,255,0.8); padding: 2px 6px; border-radius: 4px; }
+        #selection-frame.hidden { display: none !important; }
+
+        /* Preview */
+        #preview-wrapper { position: absolute; top:0; left:0; width: 100%; height: 100%; display: none; justify-content: center; align-items: center; background: #555; z-index: 20; overflow: hidden;}
+        #canvas-container { position: relative; box-shadow: 0 0 30px rgba(0,0,0,0.5); background: white; } 
+        #preview-canvas { display: block; width: 100%; height: 100%; }
+
+        /* Overlay Text */
+        #text-overlay { position: absolute; bottom: 30px; right: 30px; z-index: 30; cursor: grab; text-align: right; user-select: none; padding: 10px; transition: color 0.3s; }
+        #text-overlay:hover { border: 1px dashed rgba(128,128,128,0.5); background: rgba(255,255,255,0.1); border-radius: 4px; }
+        #text-overlay:active { cursor: grabbing; }
+        #overlay-title { display: block; font-weight: bold; font-size: 2rem; line-height: 1.1; margin-bottom: 5px; white-space: nowrap; }
+        #overlay-attr { display: block; font-size: 0.8rem; text-decoration: none; opacity: 0.8; font-family: sans-serif; }
+        
+        /* UI Elements */
+        h2 { margin-top: 0; color: var(--accent); font-size: 1.6rem; margin-bottom: 20px;}
+        .section { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
+        .section:last-child { border: none; }
+        .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-weight: 700; color: #444; font-size: 0.95rem; }
+        .step-icon { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: #eef2f5; border-radius: 50%; color: var(--accent); }
+        .step-icon svg { width: 14px; height: 14px; fill: currentColor; }
+
+        input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; margin-bottom: 10px; font-size: 14px;}
+        
+        button { width: 100%; padding: 12px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 14px;}
+        button:hover { background: #34495e; transform: translateY(-1px); }
+        button.secondary { background: #95a5a6; margin-top: 10px; }
+        button.secondary:hover { background: #7f8c8d; }
+        
+        button.active-tool { background: var(--active); box-shadow: inset 0 2px 5px rgba(0,0,0,0.2); }
+        button.active-tool:hover { background: #219150; }
+
+        .toggle-row { display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 15px; }
+        .toggle-label { font-weight: normal; font-size: 0.9rem; display: flex; align-items: center; cursor: pointer; user-select: none; }
+        #status { font-size: 0.85rem; color: #666; margin-top: 10px; min-height: 1.2em; font-style: italic; }
+        .hidden { display: none !important; }
+        .help-text { font-size:0.8rem; color:#666; margin-bottom:10px; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div id="sidebar-content">
+        <h2>CartoCanvas</h2>
+
+        <div id="step-1" class="section">
+            <div class="step-header">
+                <div class="step-icon"><svg viewBox="0 0 512 512"><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg></div>
+                Search Location
+            </div>
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="Type city or place name..." oninput="handleSearchInput(this.value)">
+                <div id="search-results"></div>
+            </div>
+        </div>
+
+        <div id="step-2" class="section">
+            <div class="step-header">
+                <div class="step-icon"><svg viewBox="0 0 448 512"><path d="M64 32C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V96c0-35.3-28.7-64-64-64H64zM325.8 139.7l14.4 14.4c15.6 15.6 15.6 40.9 0 56.6l-21.4 21.4-71-71 21.4-21.4c15.6-15.6 40.9-15.6 56.6 0zM119.9 289L225.1 183.8l71 71L190.9 359.9c-4.1 4.1-9.2 7-14.9 8.4l-60.1 15c-5.5 1.4-11.2-.2-15.2-4.2s-5.6-9.7-4.2-15.2l15-60.1c1.4-5.6 4.3-10.8 8.4-14.9z"/></svg></div>
+                Define Area
+            </div>
+            
+            <label>Method 1: Fixed Frame</label>
+            <select id="selection-shape" onchange="updateSelectionFrame()">
+                <option value="a4_p">A4 Portrait</option>
+                <option value="a4_l">A4 Landscape</option>
+                <option value="square">Square</option>
+                <option value="screen">Full Screen</option>
+            </select>
+            
+            <div style="margin: 15px 0; border-top: 1px solid #ddd;"></div>
+
+            <label>Method 2: Draw Box</label>
+            <div class="help-text">Click "Draw" then click & drag on map to select area.</div>
+            <button id="btn-draw" class="secondary" onclick="toggleDrawMode()">Draw Custom Box</button>
+            <button id="btn-clear" class="secondary hidden" onclick="clearDraw()" style="background:#e74c3c; color:white;">Clear Selection</button>
+            
+            <div style="margin-top:20px;">
+                <button onclick="fetchData()">Generate Map</button>
+            </div>
+            <div id="status"></div>
+        </div>
+
+        <div id="step-3" class="section hidden">
+            <div class="step-header">
+                <div class="step-icon"><svg viewBox="0 0 512 512"><path d="M512 256c0 .9 0 1.8 0 2.7c-.4 36.5-33.6 61.3-70.1 61.3H344c-26.5 0-48 21.5-48 48c0 3.4 .4 6.7 1 9.9c2.1 10.2 6.5 20 10.8 29.9c6.1 13.8 12.1 27.5 12.1 42c0 31.8-21.6 60.7-53.4 62c-3.5 .1-7 .2-10.6 .2C114.6 512 0 397.4 0 256S114.6 0 256 0S512 114.6 512 256zM128 288a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zm0-96a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM288 96a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zm96 96a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></svg></div>
+                Customize
+            </div>
+            
+            <label>Theme</label>
+            <select id="theme-select" onchange="renderPreview()">
+                <option value="cartography">Cartography (Clean)</option>
+                <option value="dark">City Lights (Dark)</option>
+                <option value="light">Minimalist (Light)</option>
+                <option value="blueprint">Blueprint</option>
+                <option value="paper">Old Paper</option>
+            </select>
+
+            <label>Visibility</label>
+            <div class="toggle-row">
+                <label class="toggle-label"><input type="checkbox" id="layer-roads" checked onchange="renderPreview()"> Roads</label>
+                <label class="toggle-label"><input type="checkbox" id="layer-water" checked onchange="renderPreview()"> Water</label>
+                <label class="toggle-label"><input type="checkbox" id="layer-buildings" checked onchange="renderPreview()"> Buildings</label>
+            </div>
+
+            <label>Details</label>
+            <div class="toggle-row">
+                 <label class="toggle-label"><input type="checkbox" id="layer-names" checked onchange="renderPreview()"> Road Names</label>
+            </div>
+            
+            <label>Map Title</label>
+            <input type="text" id="map-title" placeholder="ENTER TITLE" oninput="renderPreview()">
+            
+            <label>Line Scale</label>
+            <input type="range" id="line-width" min="0.5" max="3" step="0.1" value="1.0" style="width:100%" oninput="renderPreview()">
+        </div>
+
+        <div id="step-4" class="section hidden">
+            <div class="step-header">
+                <div class="step-icon"><svg viewBox="0 0 384 512"><path d="M64 0C28.7 0 0 28.7 0 64V448c0 35.3 28.7 64 64 64H320c35.3 0 64-28.7 64-64V160H256c-17.7 0-32-14.3-32-32V0H64zM256 0V128H384L256 0zM216 232V334.1l31-31c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9l-72 72c-9.4 9.4-24.6 9.4-33.9 0l-72-72c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l31 31V232c0-13.3 10.7-24 24-24s24 10.7 24 24z"/></svg></div>
+                Export
+            </div>
+            <select id="export-size">
+                <option value="screen">Standard Quality</option>
+                <option value="hd">High Definition (2x)</option>
+                <option value="ultra">Ultra Print (4x)</option>
+            </select>
+            <button onclick="exportImage()">Download Image</button>
+            <button onclick="resetApp()" class="secondary">Start Over</button>
+        </div>
+    </div>
+
+    <div class="sidebar-footer">
+        <div class="footer-main">
+            Made with <span class="heart">❤</span> by <a href="https://meta.wikimedia.org/wiki/User:Kuldeepburjbhalaike" class="footer-link">Kuldeep</a>
+            <span style="color:#ccc; margin:0 5px">|</span>
+            <a href="https://github.com/Kuldeepburjbhalaike/FrameTheMap" class="footer-source">
+                <svg height="16" viewBox="0 0 16 16" width="16" aria-hidden="true" style="fill:currentColor"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+                Source Code
+            </a>
+        </div>
+        <div class="footer-sub">
+            Inspired from <a href="http://render.osmtippek.hu" target="_blank">Render MyMap</a> and <a href="https://anvaka.github.io/city-roads/" target="_blank">city-roads</a>
+        </div>
+    </div>
+</div>
+
+<div id="main">
+    <div id="map-wrapper">
+        <div id="map-select"></div>
+        <div id="selection-frame"></div>
+    </div>
+    <div id="preview-wrapper">
+        <div id="canvas-container">
+            <canvas id="preview-canvas"></canvas>
+            <div id="text-overlay">
+                <span id="overlay-title"></span>
+                <a href="https://www.openstreetmap.org/copyright" target="_blank" id="overlay-attr">data © OpenStreetMap</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Config ---
+    const THEMES = {
+        cartography: { bg: '#f9f9f9', road: '#ffffff', roadStroke: '#222222', water: '#aad3df', waterStroke: '#638c9e', building: '#e0d8cc', text: '#222', textHalo: '#ffffff' },
+        paper: { bg: '#f4ecd8', road: '#8b5a2b', roadStroke: null, water: '#a3c6c0', building: '#e6d8b8', text: '#5c4033', textHalo: '#f4ecd8' },
+        dark: { bg: '#1a1a1a', road: '#444', roadStroke: null, water: '#222', building: '#262626', text: '#ccc', textHalo: '#000' },
+        light: { bg: '#ffffff', road: '#333', roadStroke: null, water: '#e0f7fa', building: '#f2f2f2', text: '#000', textHalo: '#fff' },
+        blueprint: { bg: '#003366', road: '#ffffff', roadStroke: null, water: '#004080', building: '#002244', text: '#fff', textHalo: '#003366' }
+    };
+
+    let map;
+    let osmData = { nodes: {}, ways: [] };
+    let currentBounds = null;
+    let labelBBoxes = [];
+    let drawMode = false;
+    let drawnRectangle = null;
+    let dragStart = null;
+    let tempRect = null;
+    let searchTimeout = null;
+
+    function initMap() {
+        map = L.map('map-select').setView([30.17, 75.33], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+        updateSelectionFrame();
+        initTextDrag();
+        setupDrawingLogic();
+    }
+
+    // --- NEW SEARCH LOGIC (Photon API) ---
+    function handleSearchInput(query) {
+        clearTimeout(searchTimeout);
+        if (query.length < 3) {
+            document.getElementById('search-results').style.display = 'none';
+            return;
+        }
+        searchTimeout = setTimeout(() => performSearch(query), 400);
+    }
+
+    async function performSearch(query) {
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`;
+        try {
+            const resp = await fetch(url);
+            const data = await resp.json();
+            displaySearchResults(data.features);
+        } catch (e) {
+            console.error("Search failed", e);
+        }
+    }
+
+    function displaySearchResults(features) {
+        const list = document.getElementById('search-results');
+        list.innerHTML = '';
+        if (features.length === 0) {
+            list.style.display = 'none';
+            return;
+        }
+        features.forEach(f => {
+            const div = document.createElement('div');
+            div.className = 'search-result-item';
+            div.innerHTML = `<strong>${f.properties.name || 'Unknown'}</strong><span class="search-sub">${[f.properties.city, f.properties.country].filter(Boolean).join(', ')}</span>`;
+            div.onclick = () => selectSearchResult(f);
+            list.appendChild(div);
+        });
+        list.style.display = 'block';
+    }
+
+    function selectSearchResult(feature) {
+        const coords = feature.geometry.coordinates;
+        // Photon is [lon, lat], Leaflet is [lat, lon]
+        map.setView([coords[1], coords[0]], 14);
+        document.getElementById('map-title').value = (feature.properties.name || '').toUpperCase();
+        document.getElementById('search-input').value = feature.properties.name;
+        document.getElementById('search-results').style.display = 'none';
+    }
+
+    // --- DRAWING ---
+    function toggleDrawMode() {
+        drawMode = !drawMode;
+        const btn = document.getElementById('btn-draw');
+        if (drawMode) {
+            btn.classList.add('active-tool');
+            btn.innerText = "Active: Click & Drag on Map";
+            document.getElementById('map-select').classList.add('drawing');
+            map.dragging.disable();
+            document.getElementById('selection-frame').classList.add('hidden');
+        } else {
+            disableDrawMode();
+        }
+    }
+
+    function disableDrawMode() {
+        drawMode = false;
+        const btn = document.getElementById('btn-draw');
+        btn.classList.remove('active-tool');
+        btn.innerText = "Draw Custom Box";
+        document.getElementById('map-select').classList.remove('drawing');
+        map.dragging.enable();
+        if(!drawnRectangle) document.getElementById('selection-frame').classList.remove('hidden');
+    }
+
+    function clearDraw() {
+        if(drawnRectangle) drawnRectangle.remove();
+        drawnRectangle = null;
+        document.getElementById('btn-clear').classList.add('hidden');
+        document.getElementById('selection-frame').classList.remove('hidden');
+        disableDrawMode();
+    }
+
+    function setupDrawingLogic() {
+        map.on('mousedown', (e) => {
+            if(!drawMode) return;
+            dragStart = e.latlng;
+            if(tempRect) tempRect.remove();
+            tempRect = L.rectangle([dragStart, dragStart], {color: "#e25555", weight: 2}).addTo(map);
+        });
+        map.on('mousemove', (e) => {
+            if(!drawMode || !dragStart || !tempRect) return;
+            tempRect.setBounds([dragStart, e.latlng]);
+        });
+        map.on('mouseup', (e) => {
+            if(!drawMode || !dragStart) return;
+            if(drawnRectangle) drawnRectangle.remove();
+            drawnRectangle = tempRect;
+            tempRect = null;
+            dragStart = null;
+            document.getElementById('btn-clear').classList.remove('hidden');
+            disableDrawMode();
+        });
+    }
+
+    // --- CORE ---
+    async function fetchData() {
+        let bounds = drawnRectangle ? drawnRectangle.getBounds() : getVisualBounds();
+        currentBounds = bounds; 
+        const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+        setStatus("Downloading Map Data...");
+        
+        const query = `
+            [out:json][timeout:25];
+            (
+              way["highway"](${bbox});
+              way["water"](${bbox});
+              way["natural"="water"](${bbox});
+              way["building"](${bbox});
+            );
+            out body;
+            >;
+            out skel qt;
+        `;
+
+        try {
+            const resp = await fetch("https://overpass-api.de/api/interpreter", {
+                method: "POST",
+                body: "data=" + encodeURIComponent(query)
+            });
+            const data = await resp.json();
+            processData(data);
+            
+            document.getElementById('map-wrapper').style.display = 'none'; 
+            document.getElementById('preview-wrapper').style.display = 'flex';
+            document.getElementById('step-2').classList.add('hidden');
+            document.getElementById('step-3').classList.remove('hidden');
+            document.getElementById('step-4').classList.remove('hidden');
+            
+            setStatus(`Rendering ${data.elements.length} elements...`);
+            waitForLayoutAndRender();
+        } catch (e) {
+            console.error(e);
+            setStatus("Error: Area too large or API busy.");
+        }
+    }
+
+    function waitForLayoutAndRender(attempts = 0) {
+        const wrapper = document.getElementById('preview-wrapper');
+        if (wrapper.clientWidth === 0 && attempts < 20) {
+            setTimeout(() => waitForLayoutAndRender(attempts + 1), 50);
+            return;
+        }
+        resizeCanvasContainer(); 
+        renderPreview();
+    }
+
+    function processData(data) {
+        osmData = { nodes: {}, ways: [] };
+        if(!data.elements) return;
+        data.elements.forEach(el => { if (el.type === 'node') osmData.nodes[el.id] = { lat: el.lat, lon: el.lon }; });
+        data.elements.forEach(el => {
+            if (el.type === 'way' && el.nodes) {
+                let type = 'other';
+                if (el.tags.building) type = 'building';
+                if (el.tags.water || el.tags.natural === 'water') type = 'water';
+                if (el.tags.highway) type = 'road';
+                if (type !== 'other') osmData.ways.push({ ids: el.nodes, type: type, tags: el.tags, name: el.tags.name || null });
+            }
+        });
+    }
+
+    function renderPreview() {
+        const canvas = document.getElementById('preview-canvas');
+        if (canvas.width === 0) return;
+        drawMap(canvas, false);
+    }
+
+    function drawMap(canvas, isExport) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        const theme = THEMES[document.getElementById('theme-select').value];
+        const baseWidth = document.getElementById('canvas-container').clientWidth || 800;
+        const scale = isExport ? (w / baseWidth) : 1;
+        const lw = parseFloat(document.getElementById('line-width').value) * scale;
+
+        if (!isExport) {
+            document.getElementById('overlay-title').innerText = document.getElementById('map-title').value.toUpperCase();
+            document.getElementById('overlay-title').style.color = theme.text;
+            document.getElementById('overlay-attr').style.color = theme.text;
+        }
+
+        ctx.fillStyle = theme.bg;
+        ctx.fillRect(0, 0, w, h);
+
+        const project = (lat, lon) => {
+            const x = ((lon - currentBounds.getWest()) / (currentBounds.getEast() - currentBounds.getWest())) * w;
+            const y = h - ((lat - currentBounds.getSouth()) / (currentBounds.getNorth() - currentBounds.getSouth())) * h;
+            return { x, y };
+        };
+
+        const drawPath = (way, color, width, cap = 'round') => {
+            ctx.beginPath(); let started = false;
+            for (let id of way.ids) {
+                let n = osmData.nodes[id]; if (!n) continue;
+                let p = project(n.lat, n.lon);
+                if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+            }
+            ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = cap; ctx.stroke();
+        };
+
+        const drawPoly = (way, color, stroke) => {
+            ctx.beginPath(); let started = false;
+            for (let id of way.ids) {
+                let n = osmData.nodes[id]; if (!n) continue;
+                let p = project(n.lat, n.lon);
+                if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+            }
+            ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+            if(stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1 * scale; ctx.stroke(); }
+        };
+
+        if(document.getElementById('layer-water').checked) osmData.ways.forEach(w => { if(w.type === 'water') drawPoly(w, theme.water, theme.waterStroke) });
+        if(document.getElementById('layer-buildings').checked) osmData.ways.forEach(w => { if(w.type === 'building') drawPoly(w, theme.building, null) });
+
+        if (document.getElementById('layer-roads').checked) {
+            const roads = osmData.ways.filter(w => w.type === 'road');
+            const hierarchy = { 'motorway': 5, 'trunk': 4, 'primary': 3, 'secondary': 2, 'tertiary': 1, 'residential': 0, 'unclassified': 0 };
+            roads.sort((a, b) => (hierarchy[a.tags.highway] || 0) - (hierarchy[b.tags.highway] || 0));
+
+            const getW = (t) => {
+                const hw = t.highway;
+                if(hw === 'motorway'||hw === 'trunk') return lw * 4;
+                if(hw === 'primary') return lw * 3.5;
+                if(hw === 'secondary') return lw * 2.5;
+                if(hw === 'tertiary') return lw * 1.8;
+                return lw * 1.5;
+            };
+
+            if (theme.roadStroke) roads.forEach(w => drawPath(w, theme.roadStroke, getW(w.tags) + (2.5 * scale)));
+            roads.forEach(w => drawPath(w, theme.road, getW(w.tags)));
+        }
+
+        if (document.getElementById('layer-names').checked) {
+            labelBBoxes = [];
+            ctx.font = `bold ${11 * scale}px Arial, sans-serif`;
+            ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = theme.text;
+            const allowed = ['primary', 'secondary', 'tertiary', 'residential', 'trunk', 'living_street'];
+            osmData.ways.forEach(w => {
+                if (w.type === 'road' && w.name && allowed.includes(w.tags.highway)) {
+                    renderTextOnPath(ctx, w, project, theme, scale);
+                }
+            });
+        }
+
+        if (isExport) burnOverlayText(ctx, w, h, theme, scale);
+    }
+
+    function renderTextOnPath(ctx, way, project, theme, scale) {
+        let bestSeg = null; let maxDist = 0;
+        for(let i=0; i<way.ids.length - 1; i++) {
+            const n1 = osmData.nodes[way.ids[i]];
+            const n2 = osmData.nodes[way.ids[i+1]];
+            if(!n1 || !n2) continue;
+            const p1 = project(n1.lat, n1.lon);
+            const p2 = project(n2.lat, n2.lon);
+            const dist = Math.sqrt((p2.x-p1.x)**2 + (p2.y-p1.y)**2);
+            if(dist > maxDist) { maxDist = dist; bestSeg = {p1, p2, dist}; }
+        }
+
+        if(!bestSeg) return;
+        const textW = ctx.measureText(way.name).width;
+        if(bestSeg.dist > textW * 0.7) {
+            const cx = (bestSeg.p1.x + bestSeg.p2.x) / 2;
+            const cy = (bestSeg.p1.y + bestSeg.p2.y) / 2;
+            let angle = Math.atan2(bestSeg.p2.y - bestSeg.p1.y, bestSeg.p2.x - bestSeg.p1.x);
+            if (angle > Math.PI/2) angle -= Math.PI; else if (angle < -Math.PI/2) angle += Math.PI;
+
+            const padding = 4 * scale;
+            const bbox = { x: cx - textW/2 - padding, y: cy - 10*scale, w: textW + padding*2, h: 20*scale };
+            for(let b of labelBBoxes) {
+                if(bbox.x < b.x + b.w && bbox.x + bbox.w > b.x && bbox.y < b.y + b.h && bbox.y + bbox.h > b.y) return;
+            }
+            labelBBoxes.push(bbox);
+
+            ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+            ctx.lineWidth = 3 * scale; ctx.strokeStyle = theme.textHalo;
+            ctx.strokeText(way.name, 0, 0); ctx.fillText(way.name, 0, 0);
+            ctx.restore();
+        }
+    }
+
+    function burnOverlayText(ctx, w, h, theme, scale) {
+        const overlay = document.getElementById('text-overlay');
+        const container = document.getElementById('canvas-container');
+        const rect = overlay.getBoundingClientRect();
+        const conRect = container.getBoundingClientRect();
+        
+        const relRight = (conRect.right - rect.right) / conRect.width;
+        const relBottom = (conRect.bottom - rect.bottom) / conRect.height;
+        const targetX = w - (relRight * w) - (10 * scale);
+        const targetY = h - (relBottom * h) - (10 * scale);
+
+        ctx.textAlign = "right"; ctx.fillStyle = theme.text;
+        ctx.font = `${12 * scale}px 'Segoe UI', sans-serif`;
+        ctx.fillText("data © OpenStreetMap", targetX, targetY);
+        
+        const title = document.getElementById('overlay-title').innerText;
+        if (title) {
+            ctx.font = `bold ${32 * scale}px 'Segoe UI', sans-serif`;
+            ctx.fillText(title, targetX, targetY - (20 * scale));
+        }
+    }
+
+    // --- UTILS ---
+    function updateSelectionFrame() {
+        const shape = document.getElementById('selection-shape').value;
+        const frame = document.getElementById('selection-frame');
+        const wrapper = document.getElementById('map-wrapper');
+        let w, h;
+        const margin = 50; 
+        const maxW = wrapper.clientWidth - margin * 2;
+        const maxH = wrapper.clientHeight - margin * 2;
+
+        if (shape === 'screen') { w = maxW; h = maxH; }
+        else if (shape === 'square') { const size = Math.min(maxW, maxH); w = size; h = size; }
+        else if (shape === 'a4_p') { h = maxH; w = h / 1.414; if (w > maxW) { w = maxW; h = w * 1.414; } }
+        else if (shape === 'a4_l') { w = maxW; h = w / 1.414; if (h > maxH) { h = maxH; w = h * 1.414; } }
+        frame.style.width = w + 'px'; frame.style.height = h + 'px';
+    }
+
+    function getVisualBounds() {
+        const frame = document.getElementById('selection-frame');
+        const rect = frame.getBoundingClientRect();
+        const mapRect = document.getElementById('map-select').getBoundingClientRect();
+        const topLeft = map.containerPointToLatLng([rect.left - mapRect.left, rect.top - mapRect.top]);
+        const bottomRight = map.containerPointToLatLng([rect.right - mapRect.left, rect.bottom - mapRect.top]);
+        return L.latLngBounds(topLeft, bottomRight);
+    }
+
+    function resizeCanvasContainer() {
+        if(!currentBounds) return;
+        const container = document.getElementById('canvas-container');
+        const wrapper = document.getElementById('preview-wrapper');
+        const latDiff = currentBounds.getNorth() - currentBounds.getSouth();
+        const heightFactor = Math.cos(currentBounds.getNorth() * Math.PI / 180);
+        const aspect = (currentBounds.getEast() - currentBounds.getWest()) / (latDiff / heightFactor);
+        
+        let w = wrapper.clientWidth * 0.95;
+        let h = w / aspect;
+        if (h > wrapper.clientHeight * 0.95) { h = wrapper.clientHeight * 0.95; w = h * aspect; }
+        
+        container.style.width = `${w}px`; container.style.height = `${h}px`;
+        document.getElementById('preview-canvas').width = w;
+        document.getElementById('preview-canvas').height = h;
+
+        const overlay = document.getElementById('text-overlay');
+        overlay.style.left = 'auto'; overlay.style.top = 'auto'; overlay.style.right = '30px'; overlay.style.bottom = '30px';
+    }
+
+    function exportImage() {
+        const sizeMode = document.getElementById('export-size').value;
+        const canvas = document.createElement('canvas');
+        const srcW = document.getElementById('preview-canvas').width;
+        const srcH = document.getElementById('preview-canvas').height;
+        let mult = 1;
+        if (sizeMode === 'hd') mult = 2; else if (sizeMode === 'ultra') mult = 4;
+        canvas.width = srcW * mult; canvas.height = srcH * mult;
+        drawMap(canvas, true);
+        const link = document.createElement('a');
+        link.download = `Map-${sizeMode}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    }
+
+    function initTextDrag() {
+        const overlay = document.getElementById('text-overlay');
+        const container = document.getElementById('canvas-container');
+        let isDragging = false; let startX, startY;
+        overlay.addEventListener('mousedown', (e) => {
+            isDragging = true; startX = e.clientX; startY = e.clientY;
+            const rect = overlay.getBoundingClientRect(); const conRect = container.getBoundingClientRect();
+            overlay.style.right = 'auto'; overlay.style.bottom = 'auto';
+            overlay.style.left = (rect.left - conRect.left) + 'px'; overlay.style.top = (rect.top - conRect.top) + 'px';
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return; e.preventDefault();
+            const dx = e.clientX - startX; const dy = e.clientY - startY;
+            overlay.style.left = (parseFloat(overlay.style.left) + dx) + 'px';
+            overlay.style.top = (parseFloat(overlay.style.top) + dy) + 'px';
+            startX = e.clientX; startY = e.clientY;
+        });
+        window.addEventListener('mouseup', () => isDragging = false);
+    }
+
+    function resetApp() {
+        document.getElementById('map-wrapper').style.display = 'block';
+        document.getElementById('preview-wrapper').style.display = 'none';
+        document.getElementById('step-2').classList.remove('hidden');
+        document.getElementById('step-3').classList.add('hidden');
+        document.getElementById('step-4').classList.add('hidden');
+        map.invalidateSize();
+    }
+    function setStatus(msg) { document.getElementById('status').innerText = msg; }
+    window.addEventListener('resize', () => { if(document.getElementById('preview-wrapper').style.display === 'flex') { resizeCanvasContainer(); renderPreview(); } else updateSelectionFrame(); });
+    
+    initMap();
+</script>
+</body>
+</html>
